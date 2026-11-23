@@ -1,14 +1,12 @@
-// Tiny stack virtual machine: a spec-exact interpreter for make.fun's tiny stack ISA.
-// Reads every instance under MAKEFUN_INPUT_DIR, executes its program.bin against
-// input.bin, and writes stdout.bin plus exit.txt under MAKEFUN_OUTPUT_DIR.
+// Tiny stack VM: a spec-exact interpreter for make.fun's tiny stack ISA.
+// Per instance: run program.bin on input.bin, write stdout.bin + exit.txt.
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const IN_DIR = process.env.MAKEFUN_INPUT_DIR ?? "/input";
 const OUT_DIR = process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
 
-// Per-opcode metadata: immediate length, values popped, values pushed.
-// A length of -1 marks a byte that is not an opcode at all.
+// Opcode metadata: immediate length, pops, pushes; length -1 = not an opcode.
 const IMM = new Int8Array(256).fill(-1);
 const POP = new Int8Array(256);
 const PSH = new Int8Array(256);
@@ -20,24 +18,24 @@ function def(op: number, imm: number, pops: number, pushes: number): void {
 def(0x00, 0, 0, 0); // HALT
 def(0x01, 1, 0, 1); // PUSH8
 def(0x02, 4, 0, 1); // PUSH32
-def(0x03, 0, 1, 0); // POP
-def(0x04, 0, 1, 2); // DUP
-def(0x05, 0, 2, 2); // SWAP
-def(0x06, 0, 2, 3); // OVER
-def(0x07, 0, 3, 3); // ROT
+def(0x03, 0, 1, 0);
+def(0x04, 0, 1, 2);
+def(0x05, 0, 2, 2);
+def(0x06, 0, 2, 3);
+def(0x07, 0, 3, 3);
 for (const op of [0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x18, 0x19, 0x1a, 0x1c, 0x1d, 0x1e, 0x20, 0x21, 0x22]) def(op, 0, 2, 1);
-def(0x17, 0, 1, 1); // NEG
-def(0x1b, 0, 1, 1); // NOT
+def(0x17, 0, 1, 1);
+def(0x1b, 0, 1, 1);
 def(0x30, 2, 0, 0); // JMP
-def(0x31, 2, 1, 0); // JZ
-def(0x32, 2, 1, 0); // JNZ
+def(0x31, 2, 1, 0);
+def(0x32, 2, 1, 0);
 def(0x33, 2, 0, 0); // CALL
-def(0x34, 0, 0, 0); // RET
+def(0x34, 0, 0, 0);
 def(0x40, 0, 1, 1); // LOAD
 def(0x41, 0, 2, 0); // STORE
 def(0x50, 0, 1, 0); // PRINT
 def(0x51, 0, 1, 0); // PUTC
-def(0x52, 0, 0, 1); // IN
+def(0x52, 0, 0, 1);
 def(0x53, 0, 1, 0); // EXIT
 
 const STACK_CAP = 256;
@@ -60,16 +58,27 @@ function execute(prog: Uint8Array, input: Uint8Array): { out: Uint8Array; code: 
   let pc = 0;
   let steps = 0;
   const finish = (code: number) => ({ out: buf.slice(0, used), code });
+  // Decode cache (rev 2): opcode + next-pc per offset (decode is pure in pc).
+  const opAt = new Int16Array(n).fill(-1);
+  const nextAt = new Int32Array(n);
 
   for (;;) {
     if (steps === STEP_CAP) return finish(10);
     if (pc < 0 || pc >= n) return finish(9);
-    const op = prog[pc];
-    const imm = IMM[op];
-    if (imm < 0) return finish(5);
-    if (pc + imm >= n) return finish(9);
+    let op = opAt[pc];
+    let next = 0;
+    if (op < 0) {
+      op = prog[pc];
+      const imm = IMM[op];
+      if (imm < 0) return finish(5);
+      if (pc + imm >= n) return finish(9);
+      next = pc + 1 + imm;
+      opAt[pc] = op;
+      nextAt[pc] = next;
+    } else {
+      next = nextAt[pc];
+    }
     steps += 1;
-    const next = pc + 1 + imm;
     if (sp < POP[op]) return finish(2);
     if (sp - POP[op] + PSH[op] > STACK_CAP) return finish(3);
     pc = next;
